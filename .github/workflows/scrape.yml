@@ -2,19 +2,16 @@ name: Booth Scraper
 
 on:
   schedule:
-    # 1時間に1回実行 (毎時0分)
     - cron: '0 * * * *'
-  # 手動実行ボタンも有効化 (テスト用)
   workflow_dispatch:
 
-# Gitへの書き込み権限を付与
 permissions:
   contents: write
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 5 # 万が一フリーズした時のため
+    timeout-minutes: 5
 
     steps:
       - name: Checkout code
@@ -33,6 +30,7 @@ jobs:
 
       - name: Run Scraper
         env:
+          # ここを確認！全て同じ列に並んでいる必要があります
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           SITE_CONFIG_JSON: ${{ secrets.SITE_CONFIG_JSON }}
           TARGETS_JSON: ${{ secrets.TARGETS_JSON }}
@@ -42,16 +40,10 @@ jobs:
         run: |
           git config user.name "Scraper Bot"
           git config user.email "bot@example.com"
-          
-          # state.json をステージング
           git add state.json
-          
-          # 変更があるか確認
           if ! git diff --cached --quiet; then
-            # [skip ci] を付けることで、コミットによるループ実行を防止
             git commit -m "Update state [skip ci]"
             git push
-            echo "Successfully updated state.json"
           else
             echo "No changes to commit."
           fi
