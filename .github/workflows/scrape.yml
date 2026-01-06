@@ -1,0 +1,57 @@
+name: Booth Scraper
+
+on:
+  schedule:
+    # 1時間に1回実行 (毎時0分)
+    - cron: '0 * * * *'
+  # 手動実行ボタンも有効化 (テスト用)
+  workflow_dispatch:
+
+# Gitへの書き込み権限を付与
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5 # 万が一フリーズした時のため
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install Dependencies
+        run: |
+          if [ -f go.mod ]; then
+            go mod tidy
+          fi
+
+      - name: Run Scraper
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SITE_CONFIG_JSON: ${{ secrets.SITE_CONFIG_JSON }}
+          TARGETS_JSON: ${{ secrets.TARGETS_JSON }}
+        run: go run main.go
+
+      - name: Commit and Push State
+        run: |
+          git config user.name "Scraper Bot"
+          git config user.email "bot@example.com"
+          
+          # state.json をステージング
+          git add state.json
+          
+          # 変更があるか確認
+          if ! git diff --cached --quiet; then
+            # [skip ci] を付けることで、コミットによるループ実行を防止
+            git commit -m "Update state [skip ci]"
+            git push
+            echo "Successfully updated state.json"
+          else
+            echo "No changes to commit."
+          fi
