@@ -127,7 +127,7 @@ func main() {
 					newLastID = item.ID
 				}
 				foundNew = true
-				time.Sleep(2 * time.Second)
+				time.Sleep(30 * time.Second)
 			}
 		}
 
@@ -208,8 +208,8 @@ func generateGeminiDescription(item Item) string {
 	prompt := fmt.Sprintf("以下の商品について、リンク先の内容を想像しつつ、フレンドリーかつ詳細に説明する紹介文を日本語で生成してください。\n\n商品名: %s\n価格: %s\nショップ: %s\nリンク: %s",
 		item.Title, item.Price, item.ShopName, item.PageURL)
 
-	// gemini-2.0-flash を使用
-	resp, err := client.Models.GenerateContent(ctx, "gemini-3-flash-preview", genai.Text(prompt), nil)
+	// gemini-2.5-flash を使用
+	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash", genai.Text(prompt), nil)
 	if err != nil {
 		log.Printf("Gemini API error: %v", err)
 		return "AI description unavailable."
