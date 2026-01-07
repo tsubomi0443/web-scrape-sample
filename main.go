@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/joho/godotenv"
+	"google.golang.org/genai"
 )
 
 const StateFile = "state.json"
@@ -64,7 +66,6 @@ type Footer struct {
 
 func main() {
 	_ = godotenv.Load()
-
 	webhookURL := os.Getenv("DISCORD_WEBHOOK_URL")
 	if webhookURL == "" {
 		log.Fatal("Error: DISCORD_WEBHOOK_URL is not set")
@@ -116,7 +117,11 @@ func main() {
 			item := items[i]
 			if item.ID > lastID {
 				log.Printf("  New item: %s", item.Title)
-				sendDiscordEmbed(webhookURL, item, target.Name)
+
+				// Geminiで説明文を生成
+				aiDescription := generateGeminiDescription(item)
+
+				sendDiscordEmbed(webhookURL, item, target.Name, aiDescription)
 
 				if item.ID > newLastID {
 					newLastID = item.ID
@@ -184,6 +189,45 @@ func scrapeGeneric(url string, config SiteConfig) ([]Item, error) {
 	return items, nil
 }
 
+// Gemini APIを使用して商品の説明文を生成する
+func generateGeminiDescription(item Item) string {
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		return "Gemini API Key is not set."
+	}
+
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey: apiKey,
+	})
+	if err != nil {
+		log.Printf("Failed to create Gemini client: %v", err)
+		return "Failed to initialize AI."
+	}
+
+	prompt := fmt.Sprintf("以下の商品について、リンク先の内容を想像しつつ、フレンドリーかつ詳細に説明する紹介文を日本語で生成してください。\n\n商品名: %s\n価格: %s\nショップ: %s\nリンク: %s",
+		item.Title, item.Price, item.ShopName, item.PageURL)
+
+	// gemini-2.0-flash を使用
+	resp, err := client.Models.GenerateContent(ctx, "gemini-3-flash-preview", genai.Text(prompt), nil)
+	if err != nil {
+		log.Printf("Gemini API error: %v", err)
+		return "AI description unavailable."
+	}
+
+	if len(resp.Candidates) > 0 && len(resp.Candidates[0].Content.Parts) > 0 {
+		//if text, ok := resp.Candidates[0].Content.Parts[0].Text.(string); ok {
+		//	return text
+		//}
+
+		// Textがstringでない場合（構造体など）のフォールバックが必要なら記述するが、
+		// genai.Text()でリクエストした場合、通常は文字列で返ってくる
+		return fmt.Sprintf("%v", resp.Candidates[0].Content.Parts[0].Text)
+	}
+
+	return "No description generated."
+}
+
 // ヘルパー関数（変更なし）
 func loadState() (State, error) {
 	s := make(State)
@@ -199,9 +243,11 @@ func saveState(s State) error {
 	return os.WriteFile(StateFile, d, 0644)
 }
 
-func sendDiscordEmbed(webhookURL string, item Item, src string) {
+func sendDiscordEmbed(webhookURL string, item Item, src string, aiDescription string) {
+	description := fmt.Sprintf("**Price:** %s\n**Shop:** %s\n\n**AI紹介:**\n%s", item.Price, item.ShopName, aiDescription)
+
 	payload := DiscordWebhook{Embeds: []Embed{{
-		Title: item.Title, Description: fmt.Sprintf("**Price:** %s\n**Shop:** %s", item.Price, item.ShopName),
+		Title: item.Title, Description: description,
 		URL: item.PageURL, Color: 0xFC4D50, Thumbnail: &EmbedImg{URL: item.ImageURL},
 		Footer: &Footer{Text: fmt.Sprintf("[%s] ID: %d", src, item.ID)},
 	}}}
