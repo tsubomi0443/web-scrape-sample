@@ -1,3 +1,4 @@
 .env
 go_build_HookChecker
 .idea
+*.sh
