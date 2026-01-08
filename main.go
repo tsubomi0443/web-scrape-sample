@@ -127,7 +127,7 @@ func main() {
 					newLastID = item.ID
 				}
 				foundNew = true
-				time.Sleep(30 * time.Second)
+				time.Sleep(5 * time.Second)
 			}
 		}
 
