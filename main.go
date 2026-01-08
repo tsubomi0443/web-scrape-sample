@@ -223,7 +223,7 @@ func generateGeminiDescription(item Item) string {
 		return "Failed to initialize AI."
 	}
 
-	prompt := fmt.Sprintf("以下の商品について、リンク先の内容を想像しつつ、フレンドリーかつ詳細に説明する紹介文を日本語で生成してください。文字列の長さは150文字程度でまとめてください。紹介文とは別に対応アバターを紹介文の上に箇条書で記載してください。\n\n商品名: %s\n価格: %s\nショップ: %s\nリンク: %s",
+	prompt := fmt.Sprintf("以下の商品について、リンク先の内容を想像しつつ、フレンドリーかつ詳細に説明する紹介文を日本語で生成してください。文字列の長さは150文字程度でまとめてください。紹介文とは別に対応アバターが明記だれている場合に限り紹介文の上に箇条書で記載してください。明記されていなければ非表示にしてください。\n\n商品名: %s\n価格: %s\nショップ: %s\nリンク: %s",
 		item.Title, item.Price, item.ShopName, item.PageURL)
 
 	// gemini-2.5-flash を使用
