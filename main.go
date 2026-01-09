@@ -101,7 +101,6 @@ func main() {
 
 	var wg sync.WaitGroup
 	var stateMutex sync.Mutex
-	anyUpdated := false
 
 	log.Println("Starting checks with 5 minute timeout...")
 
@@ -182,7 +181,8 @@ func main() {
 				// 他のGoroutineが更新している可能性も考慮し、より大きいIDを採用
 				if newLastID > state[t.Name] {
 					state[t.Name] = newLastID
-					anyUpdated = true
+					saveState(state)
+					log.Println("State updated.")
 				}
 				stateMutex.Unlock()
 			}
@@ -194,13 +194,6 @@ func main() {
 
 	if ctx.Err() == context.DeadlineExceeded {
 		log.Println("Global time limit reached.")
-	}
-
-	if anyUpdated {
-		saveState(state)
-		log.Println("State updated.")
-	} else {
-		log.Println("No updates found.")
 	}
 }
 
