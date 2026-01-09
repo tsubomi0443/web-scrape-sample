@@ -170,7 +170,7 @@ func main() {
 					select {
 					case <-ctx.Done():
 						goto FINISH
-					case <-time.After(2 * time.Second):
+					case <-time.After(1 * time.Second):
 					}
 				}
 			}
