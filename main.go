@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -20,7 +21,7 @@ import (
 
 const StateFile = "state.json"
 
-// 【変更点1】サイトの構造定義（セレクタのみ）
+// サイトの構造定義
 type SiteConfig struct {
 	RootSelector  string `json:"root"`
 	TitleSelector string `json:"title"`
@@ -30,13 +31,12 @@ type SiteConfig struct {
 	ImageSelector string `json:"image"`
 }
 
-// 【変更点2】監視対象リスト（名前とURLのみ）
+// 監視対象リスト
 type Target struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
 }
 
-// 以下の構造体は変更なし
 type State map[string]int
 type Item struct {
 	ID       int
@@ -46,8 +46,11 @@ type Item struct {
 	ImageURL string
 	PageURL  string
 }
+
+// Discord Webhook構造体（Username追加）
 type DiscordWebhook struct {
-	Embeds []Embed `json:"embeds"`
+	Username string  `json:"username,omitempty"`
+	Embeds   []Embed `json:"embeds"`
 }
 type Embed struct {
 	Title       string    `json:"title"`
@@ -71,7 +74,6 @@ func main() {
 		log.Fatal("Error: DISCORD_WEBHOOK_URL is not set")
 	}
 
-	// 1. サイト設定（セレクタ）の読み込み
 	configEnv := os.Getenv("SITE_CONFIG_JSON")
 	if configEnv == "" {
 		log.Fatal("Error: SITE_CONFIG_JSON is not set")
@@ -81,7 +83,6 @@ func main() {
 		log.Fatalf("SITE_CONFIG_JSON parse error: %v", err)
 	}
 
-	// 2. ターゲットリスト（URL）の読み込み
 	targetsEnv := os.Getenv("TARGETS_JSON")
 	if targetsEnv == "" {
 		log.Fatal("Error: TARGETS_JSON is not set")
@@ -96,79 +97,121 @@ func main() {
 		state = make(State)
 	}
 
-	updated := false
-	startTime := time.Now()
-	const timeLimit = 15 * time.Minute
+	// 5分のタイムアウトを設定
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 
-	// ターゲットごとにループ
+	var wg sync.WaitGroup
+	var stateMutex sync.Mutex
+	anyUpdated := false
+
+	log.Println("Starting checks with 5 minute timeout...")
+
+	// ターゲットごとにGoroutineを起動
 	for _, target := range targets {
-		if time.Since(startTime) > timeLimit {
-			log.Println("Time limit reached. Stopping...")
-			break
-		}
+		wg.Add(1)
+		go func(t Target) {
+			defer wg.Done()
 
-		log.Printf("Checking: %s", target.Name)
-
-		// URL(target) と 設定(siteConfig) を渡す
-		items, err := scrapeGeneric(target.URL, siteConfig)
-		if err != nil {
-			log.Printf("  Error: %v", err)
-			continue
-		}
-
-		lastID := state[target.Name]
-		newLastID := lastID
-		foundNew := false
-		timeUp := false
-
-		for i := len(items) - 1; i >= 0; i-- {
-			if time.Since(startTime) > timeLimit {
-				log.Println("Time limit reached during item processing. Stopping...")
-				timeUp = true
-				break
+			// 処理開始前にContextチェック
+			if ctx.Err() != nil {
+				return
 			}
 
-			item := items[i]
-			if item.ID > lastID {
-				log.Printf("  New item: %s", item.Title)
+			log.Printf("[%s] Checking...", t.Name)
 
-				// Geminiで説明文を生成
-				aiDescription := generateGeminiDescription(item)
+			// スクレイピング実行
+			items, err := scrapeGeneric(ctx, t.URL, siteConfig)
+			if err != nil {
+				log.Printf("[%s] Error: %v", t.Name, err)
+				return
+			}
 
-				sendDiscordEmbed(webhookURL, item, target.Name, aiDescription)
+			// 現在のLastIDを取得（排他制御）
+			stateMutex.Lock()
+			lastID := state[t.Name]
+			stateMutex.Unlock()
 
-				if item.ID > newLastID {
-					newLastID = item.ID
+			newLastID := lastID
+			foundNew := false
+
+			// アイテムを古い順（ID昇順）またはリストの後ろから処理
+			// 元のロジックに合わせてリストの後ろから処理
+			for i := len(items) - 1; i >= 0; i-- {
+				// ループごとにContextチェック
+				select {
+				case <-ctx.Done():
+					log.Printf("[%s] Time limit reached. Stopping...", t.Name)
+					goto FINISH
+				default:
 				}
-				foundNew = true
-				time.Sleep(5 * time.Second)
+
+				item := items[i]
+				if item.ID > lastID {
+					log.Printf("[%s] New item: %s", t.Name, item.Title)
+
+					// Geminiで説明文を生成
+					mode := os.Getenv("MODE")
+					SECRET := os.Getenv("SECRET")
+					var description string
+					if mode == SECRET {
+						description = generateGeminiDescription(ctx, item)
+					} else {
+						description = "This mode is testing mode. because you dont have special secret ke.y"
+					}
+
+					// Discord送信
+					sendDiscordEmbed(webhookURL, item, t.Name, description)
+
+					if item.ID > newLastID {
+						newLastID = item.ID
+					}
+					foundNew = true
+
+					// APIレート制限などを考慮して少し待機（Context対応）
+					select {
+					case <-ctx.Done():
+						goto FINISH
+					case <-time.After(2 * time.Second):
+					}
+				}
 			}
-		}
 
-		if foundNew {
-			state[target.Name] = newLastID
-			updated = true
-		}
-
-		if timeUp {
-			break
-		}
-
-		time.Sleep(1 * time.Second)
+		FINISH:
+			// 更新があればStateを更新（排他制御）
+			if foundNew {
+				stateMutex.Lock()
+				// 他のGoroutineが更新している可能性も考慮し、より大きいIDを採用
+				if newLastID > state[t.Name] {
+					state[t.Name] = newLastID
+					anyUpdated = true
+				}
+				stateMutex.Unlock()
+			}
+		}(target)
 	}
 
-	if updated {
+	// 全Goroutineの終了を待機
+	wg.Wait()
+
+	if ctx.Err() == context.DeadlineExceeded {
+		log.Println("Global time limit reached.")
+	}
+
+	if anyUpdated {
 		saveState(state)
 		log.Println("State updated.")
+	} else {
+		log.Println("No updates found.")
 	}
 }
 
-// 【変更点3】引数を分離
-func scrapeGeneric(url string, config SiteConfig) ([]Item, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
-	req, _ := http.NewRequest("GET", url, nil)
+// scrapeGeneric: Contextを受け取るように変更
+func scrapeGeneric(ctx context.Context, url string, config SiteConfig) ([]Item, error) {
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
 
+	client := &http.Client{Timeout: 30 * time.Second}
 	res, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -182,8 +225,10 @@ func scrapeGeneric(url string, config SiteConfig) ([]Item, error) {
 
 	var items []Item
 
-	// config内のセレクタを使用
 	doc.Find(config.RootSelector).Each(func(_ int, s *goquery.Selection) {
+		// Contextがキャンセルされていたら処理を中断したいが、
+		// goqueryのEachは中断できないため、ループ内でチェックしても効果は薄い。
+		// ただし、重い処理がある場合はここでチェックする。
 
 		idStr, _ := s.Attr("data-product-id")
 		id, _ := strconv.Atoi(idStr)
@@ -207,14 +252,13 @@ func scrapeGeneric(url string, config SiteConfig) ([]Item, error) {
 	return items, nil
 }
 
-// Gemini APIを使用して商品の説明文を生成する
-func generateGeminiDescription(item Item) string {
+// generateGeminiDescription: Contextを受け取るように変更
+func generateGeminiDescription(ctx context.Context, item Item) string {
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
 		return "Gemini API Key is not set."
 	}
 
-	ctx := context.Background()
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey: apiKey,
 	})
@@ -223,9 +267,7 @@ func generateGeminiDescription(item Item) string {
 		return "Failed to initialize AI."
 	}
 	promptBaseText := os.Getenv("PROMPT_BASE_TEXT")
-	//prompt := fmt.Sprintf("以下の商品について、リンク先の内容を想像しつつ、フレンドリーかつ詳細に説明する紹介文を日本語で生成してください。文字列の長さは150文字程度でまとめてください。紹介文とは別に対応アバターが明記だれている場合に限り紹介文の上に箇条書で記載してください。明記されていなければ非表示にしてください。\n\n商品名: %s\n価格: %s\nショップ: %s\nリンク: %s",
-	prompt := fmt.Sprintf(promptBaseText+"\n\n商品名: %s\n価格: %s\nショップ: %s\nリンク: %s",
-		item.Title, item.Price, item.ShopName, item.PageURL)
+	prompt := fmt.Sprintf(promptBaseText+"\n\n商品名: %s\n価格: %s\nショップ: %s\nリンク: %s", item.Title, item.Price, item.ShopName, item.PageURL)
 
 	// gemini-2.5-flash を使用
 	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash", genai.Text(prompt), nil)
@@ -235,19 +277,12 @@ func generateGeminiDescription(item Item) string {
 	}
 
 	if len(resp.Candidates) > 0 && len(resp.Candidates[0].Content.Parts) > 0 {
-		//if text, ok := resp.Candidates[0].Content.Parts[0].Text.(string); ok {
-		//	return text
-		//}
-
-		// Textがstringでない場合（構造体など）のフォールバックが必要なら記述するが、
-		// genai.Text()でリクエストした場合、通常は文字列で返ってくる
 		return fmt.Sprintf("%v", resp.Candidates[0].Content.Parts[0].Text)
 	}
 
 	return "No description generated."
 }
 
-// ヘルパー関数（変更なし）
 func loadState() (State, error) {
 	s := make(State)
 	f, err := os.ReadFile(StateFile)
@@ -265,11 +300,14 @@ func saveState(s State) error {
 func sendDiscordEmbed(webhookURL string, item Item, src string, aiDescription string) {
 	description := fmt.Sprintf("**Price:** %s\n**Shop:** %s\n\n**AI紹介:**\n%s", item.Price, item.ShopName, aiDescription)
 
-	payload := DiscordWebhook{Embeds: []Embed{{
-		Title: item.Title, Description: description,
-		URL: item.PageURL, Color: 0xFC4D50, Thumbnail: &EmbedImg{URL: item.ImageURL},
-		Footer: &Footer{Text: fmt.Sprintf("[%s] ID: %d", src, item.ID)},
-	}}}
+	payload := DiscordWebhook{
+		Username: src, // 通知名をTargetのNameにする
+		Embeds: []Embed{{
+			Title: item.Title, Description: description,
+			URL: item.PageURL, Color: 0xFC4D50, Thumbnail: &EmbedImg{URL: item.ImageURL},
+			Footer: &Footer{Text: fmt.Sprintf("[%s] ID: %d", src, item.ID)},
+		}},
+	}
 	jsonPayload, _ := json.Marshal(payload)
 	http.Post(webhookURL, "application/json", bytes.NewBuffer(jsonPayload))
 }

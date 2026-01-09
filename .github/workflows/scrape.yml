@@ -36,6 +36,8 @@ jobs:
           TARGETS_JSON: ${{ secrets.TARGETS_JSON }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PROMPT_BASE_TEXT: ${{ secrets.PROMPT_BASE_TEXT }}
+          MODE: ${{ secrets.MODE }}
+          SECRET: ${{ secrets.SECRET }}
         run: go run main.go
 
       - name: Commit and Push State
