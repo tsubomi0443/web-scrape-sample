@@ -69,10 +69,8 @@ type Footer struct {
 
 func main() {
 	_ = godotenv.Load()
-	webhookURL := os.Getenv("DISCORD_WEBHOOK_URL")
-	if webhookURL == "" {
-		log.Fatal("Error: DISCORD_WEBHOOK_URL is not set")
-	}
+	webhookURL := strings.Split(os.Getenv("DISCORD_WEBHOOK_URL"), ",")
+	log.Println(os.Getenv("DISCORD_WEBHOOK_URL"))
 
 	configEnv := os.Getenv("SITE_CONFIG_JSON")
 	if configEnv == "" {
@@ -297,7 +295,7 @@ func saveState(s State) error {
 	return os.WriteFile(StateFile, d, 0644)
 }
 
-func sendDiscordEmbed(webhookURL string, item Item, src string, aiDescription string) {
+func sendDiscordEmbed(webhookURL []string, item Item, src string, aiDescription string) {
 	description := fmt.Sprintf("**Price:** %s\n**Shop:** %s\n\n**AI紹介:**\n%s", item.Price, item.ShopName, aiDescription)
 
 	payload := DiscordWebhook{
@@ -309,5 +307,7 @@ func sendDiscordEmbed(webhookURL string, item Item, src string, aiDescription st
 		}},
 	}
 	jsonPayload, _ := json.Marshal(payload)
-	http.Post(webhookURL, "application/json", bytes.NewBuffer(jsonPayload))
+	for _, wURL := range webhookURL {
+		http.Post(wURL, "application/json", bytes.NewBuffer(jsonPayload))
+	}
 }
