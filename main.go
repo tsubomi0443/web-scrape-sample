@@ -98,7 +98,7 @@ func main() {
 
 	updated := false
 	startTime := time.Now()
-	const timeLimit = 5 * time.Minute
+	const timeLimit = 15 * time.Minute
 
 	// ターゲットごとにループ
 	for _, target := range targets {
