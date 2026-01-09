@@ -296,7 +296,7 @@ func saveState(s State) error {
 }
 
 func sendDiscordEmbed(webhookURL []string, item Item, src string, aiDescription string) {
-	description := fmt.Sprintf("**Price:** %s\n**Shop:** %s\n\n**AI紹介:**\n%s", item.Price, item.ShopName, aiDescription)
+	description := fmt.Sprintf("**Price:** %s\n**Shop:** %s\n\n**紹介:**\n%s", item.Price, item.ShopName, aiDescription)
 
 	payload := DiscordWebhook{
 		Username: src, // 通知名をTargetのNameにする
